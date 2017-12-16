@@ -14,15 +14,19 @@ library(tidyr)
 
 jmse = read.csv("S:\\Creel\\2099\\2015 SAS files\\PSF\\E_jnu_2015_mc_mse_variable.csv", header = TRUE)
 jmss = read.csv("S:\\Creel\\2099\\2015 SAS files\\PSF\\E_jnu_2015_mc_mss_variable.csv", header = TRUE)
-
+jmsi = read.csv("S:\\Creel\\2099\\2015 SAS files\\PSF\\E_jnu_2015_mc_msis_wBhat_ij.csv", header = TRUE)
 str(jmss)
 
 unique(jmse$BIWEEK)
 
-jmss <- jmss %>%
-  filter(BIWEEK == 10)
+biweek_selection <- 10
+jmss <- jmss %>% filter(BIWEEK == biweek_selection)
+jmse <- jmse %>% filter(BIWEEK == biweek_selection)
+jmsi <- jmsi %>% filter(BIWEEK == biweek_selection)
 
-jmse <- jmse %>%
+head(jmse)
+names(jmsi)
+jmsi <- jmsi %>%
   select(DATE, HARBOR, N_MISSED, #NUMBER OF MISSED BOATS
          N_NOT_SF, # NUMBER OF BOATS NOT SPORT FISHING. 
          INTVNUMB, #INTERVIEW NUMBER
@@ -30,20 +34,29 @@ jmse <- jmse %>%
          BIWEEK, # TWO WEEKS
          #RODHOURS, SALHOURS, HALHOURS, ROCHOURS,
          #estimated number of boats: P= private, c = Charter, U = unknown, SF, sportfishing = P+C
-         lz_ij, lz_Pij, lz_Cij, lz_Uij, #lz = little z = number of boats interviewed on that day and harbor, P = private, C = charter, U = unknown.
+         #lz_ij, lz_Pij, lz_Cij, lz_Uij, #lz = little z = number of boats interviewed on that day and harbor, P = private, C = charter, U = unknown.
+         lb_ij,
+         lb_Pij,
+         lb_Cij,
+         lb_Uij,
+         lbhat_Pij,
+         lbhat_Cij,
          la_ij, # Num. boats SF.and.not.SF, 
          BA_ij, #All.boats, 
          BBhat_ij, #Est.num.SF.boats, 
-         N, # What is N? 
-         KRFV, #kept rockfish
+         KRF, #kept rockfish
          KRFS, # kept rockfish sampled (for biological data)
          KROCN, 
          KROCS, #kEPT UNKNOWN ROCKFISH
          KPLGV, KPLGS, # v = verified, s = sampled
          KPLG   #kept pelagic rockfish
-         
   ) %>%
-  filter(BIWEEK == 10) #BW 10 few enough to calculate BW13 most RF
+  mutate(KKRF = KRF- KROCS, 
+         n_mhijk = KKRF, 
+         N_mhijk = KRF, 
+         y_hijk = KPLG/n_mhijk, 
+         prop_p = y_hijk, 
+         f_4hijk = n_mhijk/N_mhijk)
 
 
 #Calculate:
@@ -52,27 +65,47 @@ jmse <- jmse %>%
 #  The sample variance: n*/(n-1)*p(1-p)
 #  The finite populationcorrection factor: (N-n)/N: fpc
 
-pel_p_samp_var <- function(KRFV, KKRF, pel_p){
-  if (KKRF == 1) {
-    return(0)
+prop_p_samp_var <- function(N , n, p){
+  if (n == 1) {
+    return(NA) #Cannot calculate variance of one item. 
   } else {
-    fpc = (KRFV - KKRF)/KRFV
-    samp_var = fpc * KKRF/(KKRF-1)*pel_p*(1-pel_p)
+    samp_var = n/(n-1)*p*(1-p)
     return(samp_var)
   }
 }
 
-
-jmse <- jmse %>%
+b_hij_calc <- function(b_p, b_c, class_pc){
+  if(class_pc == 1){
+    b_hij <- b_p
+  }else if (class_pc == 2){
+    b_hij <- b_c
+  }else{
+    stop("No class defined.")
+  }
+}
+boat <- jmsi %>%
   group_by(DATE, HARBOR, INTVNUMB) %>%
-  filter(KRFV > 0) %>%
-  mutate(KKRF = KRFV - KROCS, pel_p = KPLG/KKRF, s_4_hijk = pel_p_samp_var(KRFV, KKRF, pel_p)) 
+  filter(N_mhijk > 0) %>%
+  mutate(s_4hijk = prop_p_samp_var(N_mhijk , n_mhijk, prop_p), 
+         b_hij = b_hij_calc(lb_Pij, lb_Cij, CLASS))
+    
+    #s_4_hijk = prop_p_samp_var(N_mhijk , n_mhijk, prop_p)) 
 
 #Note: in biweek 10 there are 8 instances of RF caught, 
 #and there is either a complete census of the RF or there are 0 Pelagic, 
-#so variance is always 0 with in boats
+#so variance is always 0 within boats
 
-jmse <- jmse %>%
-  group_by(DATE, HARBOR)
-  mutate(s_3_hij = var(pel_p))
+dock <- boat %>%
+  group_by(DATE, HARBOR) %>%
+  mutate(Nbar_mhij = mean(N_mhijk)) # equation 4 in 2015-2017 op plan
 
+#s_3hij = var(prop_p), 
+boat <- merge(boat, dock)
+
+boat <- boat %>%
+  mutate(w_4hijk = N_mhijk/Nbar_mhij, ybar_whijk = w_4hijk*y_hijk)
+
+dock <- boat %>%
+  group_by(DATE, HARBOR) %>%
+  mutate(s_3hij = var(ybar_whijk), b_double_prime_mhij = count(s_4hijk))
+  
